@@ -1,0 +1,318 @@
+---
+title: "analysis"
+author: "Andrianony Ny Aina Ianjatina"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r, include=FALSE, echo=FALSE}
+#load packages and library
+library(tidyverse)    
+library(haven)        
+library(stringdist)
+library(tictoc)
+library(progressr)
+library(future)
+library(furrr)
+library(gt)
+library(readxl)
+library(fs)
+library(dplyr)
+library(ggplot2)
+library(fixest)
+library(labelled)
+library(expss)
+library(haven)
+library(patchwork)
+library(kableExtra)
+```
+
+```{r, include=FALSE, echo=FALSE}
+#set working directory
+setwd ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022")
+```
+
+```{r}
+df <- read_dta ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022/cleaned_data/food_cyclone.dta")
+```
+
+Food Insecurity Outcomes
+
+```{r, message = FALSE, warning = FALSE}
+#Impact on food insecurity outcomes
+
+model1 <- feols(FCS ~ cyclone1 + cyclone_control+ both_cyclone + post_2022 + factor(treatment):post_2022 + male + marital_status + educ + revenu + rural | district + year, 
+      data = df,
+      cluster = ~district)
+
+model2 <- feols(FIES_score ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male + marital_status + educ + revenu + rural | district + year, 
+      data = df,
+      cluster = ~district)
+
+# Creating a table with results from all models
+table <- etable(
+  model1, model2,
+  digits = 3,
+  digits.stats = 3,
+  se.below = TRUE, # Add SEs below coefficients
+  depvar = FALSE    # Don't list dependent variable at top
+)
+
+colnames(table) <- c("", "(FCS)", "(FIES)")
+
+# Display the table using kableExtra for formatting
+kable(table, caption = "Impact on Food Insecurity",
+      booktabs = TRUE, 
+      align = "lccc", 
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "center", latex_options = c("hold_position"))
+
+```
+
+
+Pre-trend
+
+```{r}
+# Collapse data by calculating the mean FCS score for each year and treatment group
+fcs_collapsed <- df %>%
+  group_by(year, treatment) %>%
+  summarise(mean_fcs = mean(FCS, na.rm = TRUE), .groups = "drop")
+
+
+# Collapse data by calculating the mean FIES score for each year and treatment group
+fies_collapsed <- df %>%
+  group_by(year, treatment) %>%
+  summarise(mean_fies = mean(FIES_score, na.rm = TRUE), .groups = "drop")
+
+
+# Create the FCS plot
+fcs_plot <- ggplot(fcs_collapsed, aes(x = year, y = mean_fcs, color = factor(treatment), shape = factor(treatment))) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("0" = "blue", "1" = "red", "2" = "green"), 
+                     labels = c("Control Group", "Cyclone 1", "Both Cyclones")) +
+  scale_shape_manual(values = c(21, 24, 22),
+                     labels = c("Control Group", "Cyclone 1", "Both Cyclones")) +
+  labs(
+    title = "Food Consumption Score Pre-Trend",
+    x = NULL,
+    y = "Mean FCS",
+    color = "Treatment Group",
+    shape = "Treatment Group"
+  ) +
+  scale_x_continuous(breaks = seq(2020, 2023, 1), limits = c(2020, 2023)) +
+  geom_vline(xintercept = 2022, linetype = "dashed", color = "black", size = 1) + 
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Create the FIES plot
+fies_plot <- ggplot(fies_collapsed, aes(x = year, y = mean_fies, color = factor(treatment), shape = factor(treatment))) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("0" = "blue", "1" = "red", "2" = "green"), 
+                     labels = c("Control Group", "Cyclone 1", "Both Cyclones")) +
+  scale_shape_manual(values = c(21, 24, 22),
+                     labels = c("Control Group", "Cyclone 1", "Both Cyclones")) +
+  labs(
+    title = "FIES Score Pre-Trend",
+    x = "Year",
+    y = "Mean FIES",
+    color = "Treatment Group",
+    shape = "Treatment Group"
+  ) +
+  scale_x_continuous(breaks = seq(2020, 2023, 1), limits = c(2020, 2023)) +
+  geom_vline(xintercept = 2022, linetype = "dashed", color = "black", size = 1) + 
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Combine the plots with a shared legend
+combined_plot <- fcs_plot + fies_plot + plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+ggsave("combined_plot.png", plot = combined_plot, width = 12, height = 6)
+
+```
+
+Mechanism on agricultural output
+
+
+```{r, message = FALSE, warning = FALSE}
+#Impact on agricultural outcomes
+
+model1 <- feols(log(sum_food_production) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + culture_system + fertilizer_type + area_cultivated| district + year, 
+      data = df,
+      cluster = ~district)
+
+model2 <- feols(log(sum_autocons) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + culture_system + fertilizer_type + area_cultivated| district + year, 
+      data = df,
+      cluster = ~district)
+
+model3 <- feols(log(sum_gift_food) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + culture_system + fertilizer_type+ area_cultivated| district + year, 
+      data = df,
+      cluster = ~district)
+
+model4 <- feols(log(sum_sales) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + culture_system + fertilizer_type + area_cultivated| district + year, 
+      data = df,
+      cluster = ~district)
+
+# Creating a table with results from all models
+table <- etable(
+  model1, model2,model3, model4,
+  digits = 3,
+  digits.stats = 3,
+  se.below = TRUE, # Add SEs below coefficients
+  depvar = FALSE    # Don't list dependent variable at top
+)
+
+colnames(table) <- c("", "Food Production", "Auto-Consumption", "Food Gift", "Food Production Sales")
+
+# Display the table using kableExtra for formatting
+kable(table, caption = "Impact on Agricultural Output",
+      booktabs = TRUE, 
+      align = "lccc", 
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "center", latex_options = c("hold_position"))
+
+```
+
+another mechanism is on household expenditure
+
+```{r, message = FALSE, warning = FALSE}
+#Impact on household expenditure
+
+model1 <- feols(log(sum_exp) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male+ marital_status + revenu + educ| district + year, 
+      data = df,
+      cluster = ~district)
+
+model2 <- feols(log(sum_nf) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male+ marital_status + revenu + educ| district + year, 
+      data = df,
+      cluster = ~district)
+
+model3 <- feols(log(sum_inctrans) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male+ marital_status + revenu + educ| district + year, 
+      data = df,
+      cluster = ~district)
+
+model4 <- feols(log(sum_outtrans) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male+ marital_status + revenu + educ| district + year, 
+      data = df,
+      cluster = ~district)
+
+model5 <- feols(log(sum_asset) ~ cyclone1 + cyclone_control + both_cyclone + post_2022 + factor(treatment):post_2022 + male+ marital_status + revenu + educ| district + year, 
+      data = df,
+      cluster = ~district)
+
+# Creating a table with results from all models
+table <- etable(
+  model1, model2,model3, model4, model5,
+  digits = 3,
+  digits.stats = 3,
+  se.below = TRUE, # Add SEs below coefficients
+  depvar = FALSE    # Don't list dependent variable at top
+)
+
+colnames(table) <- c("", "Food Expenditure", "Non Food Expenditure", "Incoming Transfer", "Outgoing Transfer", "Asset")
+
+# Display the table using kableExtra for formatting
+kable(table, caption = "Impact on Household Expenditure",
+      booktabs = TRUE, 
+      align = "lccc", 
+      row.names = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "center", latex_options = c("hold_position"))
+
+```
+
+summary stat
+
+```{r}
+df <- df %>%
+  mutate(
+    log_food_production = ifelse(sum_food_production > 0, log(sum_food_production), NA),
+    log_autocons = ifelse(sum_autocons > 0, log(sum_autocons), NA),
+    log_gift_food= ifelse(sum_gift_food > 0, log(sum_gift_food), NA),
+    log_autocons = ifelse(sum_autocons > 0, log(sum_autocons), NA),
+    log_gift_food = ifelse(sum_gift_food > 0, log(sum_gift_food), NA),
+    log_sales= ifelse(sum_sales > 0, log(sum_sales), NA),
+    log_exp = ifelse(sum_exp> 0, log(sum_exp), NA),
+    log_nf = ifelse(sum_nf> 0, log(sum_nf), NA),
+    log_inctrans = ifelse(sum_inctrans> 0, log(sum_inctrans), NA),
+    log_outtrans = ifelse(sum_outtrans> 0, log(sum_outtrans), NA),
+    log_revenu = ifelse(revenu> 0, log(revenu), NA)
+  )
+```
+
+
+
+```{r}
+# Define the list of variables for summary statistics
+variables <- c("FCS", "FIES_score","log_food_production", 
+               "log_autocons", "log_gift_food", "log_sales", "log_exp",
+               "log_nf", "log_inctrans", "log_outtrans",  "male", "marital_status", "educ", "log_revenu", "rural", "culture_system", "fertilizer_type", "fertility", "area_cultivated", "sum_asset")
+
+
+# Calculate summary statistics
+summary_stats <- data.frame(
+  Variable = variables,
+  Min = sapply(df[variables], min, na.rm = TRUE),
+  Max = sapply(df[variables], max, na.rm = TRUE),
+  Mean = sapply(df[variables], mean, na.rm = TRUE),
+  SD = sapply(df[variables], sd, na.rm = TRUE)
+)
+
+# Print summary statistics
+print(summary_stats)
+```
+
+Graphic on food price
+
+```{r}
+library(tidyverse)
+
+# Create the dataframe
+food_price <- tibble(
+  year = c(2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2022, 2023, 2023),
+  month = c(5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2),
+  Beans = c(0.805724138, 0.79716875, 0.765060606, 0.76763125, 0.808229032, 0.796248387, 0.815135484, 0.822862069, 
+            0.917933333, 0.8056, 0.868961538, 0.842824444, 0.776384091, 0.706506667, 0.7059, 0.792407273, 
+            0.780184211, 0.789113559, 1.02565, 0.925361017, 0.934005455, 0.808508333),
+  Cassava = c(0.432940909, 0.475558333, 0.380110714, 0.366545161, 0.404783333, 0.458983333, 0.449616667, 0.461082759, 
+              0.455993548, 0.3776, 0.460518919, 0.488339024, 0.459725714, 0.447424242, 0.424309524, 0.427191111, 
+              0.403594231, 0.433674545, 0.5245, 0.461359649, 0.477340741, 0.49913),
+  Maize = c(0.590803571, 0.539310345, 0.51307, 0.500753125, 0.497096552, 0.511871429, 0.499141935, 0.544360714, 
+            0.596809091, 0.4532, 0.562294444, 0.559430233, 0.543304545, 0.5259, 0.534834783, 0.56445, 
+            0.550776364, 0.537803571, 0.4662, 0.705479245, 0.748654902, 1.085590909),
+  `Rice` = c(0.658167742, 0.666428125, 0.661681818, 0.65336875, 0.656525, 0.662432258, 0.638070968, 
+                        0.660758621, 0.642587879, 0.5728, 0.6158325, 0.618547917, 0.626708511, 0.613923913, 
+                        0.601310638, 0.63124, 0.620487719, 0.611077966, 0.5507, 0.602445763, 0.611218644, 
+                        0.673433333),
+)
+
+# Create a Date column by combining year and month
+food_price <- food_price %>%
+  mutate(Date = as.Date(paste(year, month, "01", sep = "-"), "%Y-%m-%d"))
+
+# Reshape data for ggplot
+food_price_long <- food_price %>%
+  pivot_longer(cols = c(Beans, Cassava, Maize, `Rice`), 
+               names_to = "Commodity", values_to = "Price")
+```
+```{r}
+# Create the plot with a vertical line on February 2022
+plot <- ggplot(food_price_long, aes(x = Date, y = Price, color = Commodity)) +
+  geom_line(size = 1) +
+  geom_vline(xintercept = as.Date("2022-02-01"), linetype = "dashed", color = "red", size = 1) +
+  labs(title = "",
+       x = "",
+       y = "Price (per Kg/ USD",
+       color = "Commodity") +
+  theme_minimal()
+
+setwd ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022")
+# Save the plot to a file
+ggsave("commodity_prices_plot.png", plot = plot, width = 10, height = 6)
+
+```
+
+
+

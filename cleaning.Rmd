@@ -1,0 +1,1132 @@
+---
+title: "food_cyclone2022"
+author: "Andrianony Ny Aina Ianjatina"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, include=FALSE, echo=FALSE}
+#load packages and library
+library(tidyverse)    
+library(haven)        
+library(stringdist)
+library(tictoc)
+library(progressr)
+library(future)
+library(furrr)
+library(gt)
+library(readxl)
+library(fs)
+library(dplyr)
+library(ggplot2)
+library(fixest)
+library(labelled)
+library(expss)
+library(haven)
+```
+
+```{r, include=FALSE, echo=FALSE}
+#set working directory
+setwd ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022")
+```
+
+First, load data for food insecurity
+
+```{r}
+fs20 <- read_dta ("raw_data/HPS2020/S08_SECU.dta")
+fs21 <- read_dta ("raw_data/HPS2021/S08_SECU.dta")
+fs22 <- read_dta ("raw_data/HPS2022/S08_SECU.dta")
+fs23 <- read_dta ("raw_data/HPS2023/S08_SECU.dta")
+```
+
+```{r}
+fs <- bind_rows(fs20, fs21, fs22, fs23)
+```
+
+create treatment variable
+
+```{r}
+# Define district lists for cyclones
+cyclone1_districts <- c(
+  "ANTANANARIVO_RENIVOHITRA", "AMBALAVAO", "AMBATOFINANDRAHANA", "AMBATOLAMPY", "AMBOASARY",
+  "AMBOHIDRATRIMO", "AMBOHIMAHASOA", "AMBOSITRA", "AMBOVOMBE", "AMPANIHY", "ANDRAMASINA",
+  "ANKAZOABO", "ANOSIBE_AN_ALA", "ANTANAMBAO_MANAMPOTSY", "ANTANANARIVO_ATSIMONDRANO",
+  "ANTANANARIVO_AVARADRANO", "ANTANIFOTSY", "ANTSIRABEI", "ANTSIRABEII", "ARIVONIMAMO", 
+  "BEFOTAKA", "BEKILY", "BELOHA", "BENENITRA", "BEROROHA", "BETAFO", "BETIOKY-SUD", 
+  "BETROKA", "BRICKAVILLE", "FANDRIANA", "FARAFANGANA", "FARATSIHO", "FIANARANTSOA", 
+  "IAKORA", "ISANDRA", "IVOHIBE", "LALANGINA", "MAHABO", "MAHANORO", "MANAKARA", 
+  "MANANDRIANA", "MANANJARY", "MANDOTO", "MANJA", "MANJAKANDRIANA", "MAROLAMBO", 
+  "MIDONGY", "MORAMANGA", "MOROMBE", "MORONDAVA", "NOSY VARIKA", "SAKARAHA", 
+  "SOAVINANDRIANA", "TAOLAGNARO", "TULEAR-I", "TULEAR-II", "TSIHOMBE", "VANGAINDRANO", 
+  "VATOMANDRY", "VOHIBATO", "VOHIPENO", "VONDROZO", "IFANADIANA", "IHOSY", "IKALAMAVONY", 
+  "IKONGO"
+)
+
+cyclone2_districts <- c(
+  "AMBALAVAO", "AMBATOFINANDRAHANA", "AMBOHIMAHASOA", "AMBOSITRA", "ANKAZOABO", 
+  "ANOSIBE_AN_ALA", "ANTANAMBAO_MANAMPOTSY", "ANTANIFOTSY", "ANTSIRABEI", "ANTSIRABEII", 
+  "BENENITRA", "BEROROHA", "IFANADIANA", "BETAFO", "BETIOKY-SUD", "FANDRIANA", 
+  "FIANARANTSOA", "IHOSY", "IKALAMAVONY", "IKONGO", "ISANDRA", "IVOHIBE", "LALANGINA", 
+  "MAHABO", "MAHANORO", "MANAKARA", "MANANDRIANA", "MANANJARY", "MANJA", "MAROLAMBO", 
+  "MOROMBE", "MORONDAVA", "NOSY VARIKA", "SAKARAHA", "TULEAR-I", "TULEAR-II", 
+  "VOHIBATO", "VOHIPENO", "VONDROZO"
+)
+
+# Create variables cyclone1 and cyclone2
+fs$cyclone1 <- ifelse(fs$district %in% cyclone1_districts, 1, 0)
+fs$cyclone2 <- ifelse(fs$district %in% cyclone2_districts, 1, 0)
+
+# Create treatment variable
+fs$treatment <- ifelse(fs$cyclone1 == 1 & fs$cyclone2 == 0, 1, 
+                       ifelse(fs$cyclone1 == 1 & fs$cyclone2 == 1, 2, 0))
+fs <- fs %>%
+  mutate(both_cyclone = ifelse(cyclone1 == 1 & cyclone2 == 1, 1, 0))
+fs <- fs %>%
+  mutate(cyclone_control = ifelse(treatment == 0, 1, 0))
+#create a variable post_2022
+fs <- fs %>%
+  mutate(post_2022 = if_else(year >= 2022, 1, 0))  # 1 for post-2022, 0 for before
+```
+
+Create food consumption score (fcs)
+
+```{r}
+# Label relevant FCS variables ------------------------------------------------# 
+var_label(fs$q8b_03_1)   <- "Consumption over the past 7 days: cereals, grains and tubers"
+var_label(fs$q8b_03_2)  <- "Consumption over the past 7 days: pulses"
+var_label(fs$q8b_03_6)  <- "Consumption over the past 7 days: dairy products"
+var_label(fs$q8b_03_4)     <- "Consumption over the past 7 days: meat, fish and eggs"
+var_label(fs$q8b_03_3)    <- "Consumption over the past 7 days: vegetables"
+var_label(fs$q8b_03_5)  <- "Consumption over the past 7 days: fruit"
+var_label(fs$q8b_03_7)    <- "Consumption over the past 7 days: fat and oil"
+var_label(fs$q8b_03_8)  <- "Consumption over the past 7 days: sugar or sweets:"
+var_label(fs$q8b_03_9)   <- "Consumption over the past 7 days: condiments or spices"
+```
+
+```{r}
+# rename the variables
+fs <- fs %>%
+  rename(
+    FCSStap = q8b_03_1,
+    FCSPulse = q8b_03_2,
+    FCSDairy = q8b_03_6,
+    FCSPr = q8b_03_4,
+    FCSVeg = q8b_03_3,
+    FCSFruit = q8b_03_5,
+    FCSFat = q8b_03_7,
+    FCSSugar = q8b_03_8,
+    FCSCond = q8b_03_9
+  )
+```
+
+```{r}
+#calculate FCS
+fs <- fs %>% mutate(FCS = (2 * FCSStap) + (3 * FCSPulse)+ (4*FCSPr) +FCSVeg  +FCSFruit +(4*FCSDairy) + (0.5*FCSFat) + (0.5*FCSSugar))
+#create FCG groups based on 21/25 or 28/42 thresholds
+fs <- fs %>% mutate(
+  FCSCat21 = case_when(
+    FCS <= 21 ~ "Poor", between(FCS, 21.5, 35) ~ "Borderline", FCS > 35 ~ "Acceptable"),
+  FCSCat28 = case_when(
+    FCS <= 28 ~ "Poor", between(FCS, 28.5, 42) ~ "Borderline", FCS > 42 ~ "Acceptable"))
+var_label(fs$FCSCat21) <- "Food Consumption Group 21/35 thresholds"
+var_label(fs$FCSCat28) <-  "Food Consumption Group 28/42 thresholds"
+```
+
+
+```{r}
+#rename some variables
+fs <- fs %>%
+  rename(male = q1_01 , marital_status = q1_07)
+fs <- fs %>%
+  rename(rural = milieu) %>%
+  mutate(rural = ifelse(rural == 0, 1, 0)) 
+```
+
+Calculate Food Insecurity Experience Scale (FIES)
+
+```{r}
+# Function to calculate FIES score based on binary responses (1 or 0)
+calculate_fies <- function(fs) {
+  # Define the column names for the 8 questions
+  required_columns <- c("q8a_01a", "q8a_02a", "q8a_03a", "q8a_04a", 
+                        "q8a_05a", "q8a_06a", "q8a_07a", "q8a_08a")
+  
+  # Check that all required columns exist in the data
+  if(all(required_columns %in% colnames(fs))) {
+    # Calculate the FIES score by summing the binary responses (0 or 1)
+    fs$FIES_score <- rowSums(fs[, required_columns], na.rm = TRUE)
+  } else {
+    stop("Data does not contain all the required columns (q8a_01a to q8a_08a).")
+  }
+  return(fs)
+}
+
+# Apply the function to calculate the FIES score
+fs <- calculate_fies(fs)
+```
+
+add education data
+```{r}
+educ20 <- read_dta("raw_data/HPS2020/S02_EDUC.dta")
+educ21 <- read_dta("raw_data/HPS2021/S02_EDUC.dta")
+educ22 <- read_dta("raw_data/HPS2022/S02_EDUC.dta")
+educ23 <- read_dta("raw_data/HPS2023/S02_EDUC.dta")
+```
+
+```{r}
+#create year variable
+educ20$year <- 2020
+educ21$year <- 2021
+educ22$year <- 2022
+educ23$year <- 2023
+```
+
+```{r}
+educ<- bind_rows(educ20, educ21, educ22, educ23)
+```
+
+```{r}
+educ<- educ %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(fs, educ, by = c("hhgrap", "hhnum","year"))
+```
+
+```{r}
+#rename some variables
+df <- df %>%
+  rename(educ = q2_26)
+```
+
+add occupation data
+```{r}
+ocup20 <- read_dta("raw_data/HPS2020/S04_EMPL_AL.dta")
+ocup21 <- read_dta("raw_data/HPS2021/S04_EMPL_AL.dta")
+ocup22 <- read_dta("raw_data/HPS2022/S04_EMPL_AI.dta")
+ocup23 <- read_dta("raw_data/HPS2023/S04_EMPL_AL.dta")
+```
+
+```{r}
+#create year variable
+ocup20$year <- 2020
+ocup21$year <- 2021
+ocup22$year <- 2022
+ocup23$year <- 2023
+```
+
+```{r}
+ocup<- bind_rows(ocup20, ocup21, ocup22, ocup23)
+```
+
+```{r}
+ocup<- ocup %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, ocup, by = c("hhgrap", "hhnum","year"))
+```
+
+```{r}
+#rename some variables
+df <- df %>%
+  rename(revenu = q4a_46a)
+```
+
+We need now to work on some mechanism
+1. Food production
+
+```{r}
+agri20 <- read_dta("raw_data/HPS2020/S16_AGRI.dta")
+agri21 <- read_dta("raw_data/HPS2021/S16_AGRI.dta")
+agri22 <- read_dta("raw_data/HPS2022/S16_AGRI.dta")
+agri23 <- read_dta("raw_data/HPS2023/S16_AGRI.dta")
+```
+
+cleaning data for 2020
+```{r, include=FALSE, echo=FALSE}
+agri20 <- agri20 %>%
+  mutate(food_production = q16c_12 + q16c_12a)
+
+agri20 <- agri20 %>%
+  mutate(price = q16c_17/q16c_16)
+
+price <- agri20 %>%
+  group_by(q16c_05, price) %>%
+  summarise(values = paste(unique(q16c_16_uml), collapse = ", "), .groups = "drop") %>%
+  arrange(q16c_05, price)
+price <- price %>% rename(food_item = q16c_05, 
+                      prix = price)
+price_unique <- price %>%
+  distinct(food_item, values, .keep_all = TRUE) %>%
+  group_by(food_item, values) %>%
+  summarize(price_mean = mean(prix, na.rm = TRUE), .groups = "drop")
+# calculate household food production
+agri20 <- agri20 %>%
+  mutate(q16c_12a_uml = as.numeric(q16c_12a_uml)) %>%
+  left_join(price_unique %>% mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_12a_uml" = "values")) %>%
+  mutate(price12 = price_mean)
+
+agri20 <- agri20 %>%
+  mutate(production = food_production*price12)
+# calculate household auto-food cons
+agri20 <- agri20 %>%
+  mutate(q16c_13_uml = as.numeric(q16c_13_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_13_uml" = "values"))
+agri20 <- agri20 %>% rename(price13 = price_mean.y) 
+agri20 <- agri20 %>%
+  mutate(autocons = q16c_13*price13)
+# calculate household gift-food
+agri20 <- agri20 %>%
+  mutate(q16c_14_uml = as.numeric(q16c_14_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_14_uml" = "values"))
+agri20 <- agri20 %>% rename(price14 = price_mean) 
+agri20 <- agri20 %>%
+  mutate(gift_food = q16c_14*price14)
+#food production
+agri201 <- agri20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_food_production = sum(as.numeric(production), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri202 <- agri20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agri201, by = c("hhgrap", "hhnum")) 
+#household autocons
+agri203 <- agri20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_autocons = sum(as.numeric(autocons), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri205 <- left_join(agri202, agri203, by = c("hhgrap", "hhnum"))
+#gift food
+agri206 <- agri20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_gift_food = sum(as.numeric(gift_food), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri207 <- left_join(agri205, agri206, by = c("hhgrap", "hhnum"))
+#sales
+agri208 <- agri20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_sales = sum(as.numeric(q16c_17), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri209 <- left_join(agri207, agri208, by = c("hhgrap", "hhnum"))
+```
+
+cleaning data for 2021
+
+```{r, include=FALSE, echo=FALSE}
+agri21 <- agri21 %>%
+  mutate(food_production = q16c_12+q16c_12a)
+agri21 <- agri21 %>%
+  mutate(price = q16c_17/q16c_16)
+price <- agri21 %>%
+  group_by(q16c_05, price) %>%
+  summarise(values = paste(unique(q16c_16_uml), collapse = ", "), .groups = "drop") %>%
+  arrange(q16c_05, price)
+#rename variables
+price <- price %>% rename(food_item = q16c_05, 
+                      prix = price)
+price_unique <- price %>%
+  distinct(food_item, values, .keep_all = TRUE) %>%
+  group_by(food_item, values) %>%
+  summarize(price_mean = mean(prix, na.rm = TRUE), .groups = "drop")
+# calculate household food production
+agri21 <- agri21 %>%
+  mutate(q16c_12a_uml = as.numeric(q16c_12a_uml)) %>%
+  left_join(price_unique %>% mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_12a_uml" = "values")) %>%
+  mutate(price12 = price_mean)
+
+agri21 <- agri21 %>%
+  mutate(production = food_production*price12)
+# calculate household auto-food cons
+agri21 <- agri21 %>%
+  mutate(q16c_13_uml = as.numeric(q16c_13_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_13_uml" = "values"))
+agri21 <- agri21 %>% rename(price13 = price_mean.y) 
+agri21 <- agri21 %>%
+  mutate(autocons = q16c_13*price13)
+
+# calculate household gift-food
+agri21 <- agri21 %>%
+  mutate(q16c_14_uml = as.numeric(q16c_14_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_14_uml" = "values"))
+agri21 <- agri21 %>% rename(price14 = price_mean) 
+agri21 <- agri21 %>%
+  mutate(gift_food = q16c_14*price14)
+#food production
+agri211 <- agri21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_food_production = sum(as.numeric(production), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri212 <- agri21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agri201, by = c("hhgrap", "hhnum")) 
+#household autocons
+agri213 <- agri21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_autocons = sum(as.numeric(autocons), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri215 <- left_join(agri212, agri213, by = c("hhgrap", "hhnum"))
+#gift food
+agri216 <- agri21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_gift_food = sum(as.numeric(gift_food), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri217 <- left_join(agri215, agri216, by = c("hhgrap", "hhnum"))
+#sales
+agri218 <- agri21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_sales = sum(as.numeric(q16c_17), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri219 <- left_join(agri217, agri218, by = c("hhgrap", "hhnum"))
+```
+
+cleaning data for 2022
+```{r, include=FALSE, echo=FALSE}
+agri22 <- agri22 %>%
+  mutate(food_production = q16c_12+q16c_12a)
+agri22 <- agri22 %>%
+  mutate(price = q16c_17/q16c_16)
+price <- agri22 %>%
+  group_by(q16c_05, price) %>%
+  summarise(values = paste(unique(q16c_16_uml), collapse = ", "), .groups = "drop") %>%
+  arrange(q16c_05, price)
+#rename variables
+price <- price %>% rename(food_item = q16c_05, 
+                      prix = price)
+price_unique <- price %>%
+  distinct(food_item, values, .keep_all = TRUE) %>%
+  group_by(food_item, values) %>%
+  summarize(price_mean = mean(prix, na.rm = TRUE), .groups = "drop")
+# calculate household food production
+price_unique_clean <- price_unique %>%
+  mutate(values = as.numeric(values)) %>%
+  distinct(food_item, values, .keep_all = TRUE)
+
+agri22 <- agri22 %>%
+  mutate(q16c_12a_uml = as.numeric(q16c_12a_uml)) %>%
+  left_join(price_unique_clean, 
+            by = c("q16c_05" = "food_item", "q16c_12a_uml" = "values")) %>%
+  mutate(price12 = price_mean)
+agri22 <- agri22 %>%
+  mutate(production = food_production*price12)
+# calculate household auto-food cons
+price_unique_clean <- price_unique %>%
+  mutate(values = as.numeric(values)) %>%
+  distinct(food_item, values, .keep_all = TRUE)
+
+agri22 <- agri22 %>%
+  mutate(q16c_13_uml = as.numeric(q16c_13_uml)) %>%
+  left_join(price_unique_clean, 
+            by = c("q16c_05" = "food_item", "q16c_13_uml" = "values")) %>%
+  mutate(price13 = price_mean.y)
+agri22 <- agri22 %>%
+  mutate(autocons = q16c_13*price12)
+
+# calculate household gift-food
+price_unique_clean <- price_unique %>%
+  mutate(values = as.numeric(values)) %>%
+  distinct(food_item, values, .keep_all = TRUE)
+agri22 <- agri22 %>%
+  mutate(q16c_14_uml = as.numeric(q16c_14_uml)) %>%
+  left_join(price_unique_clean, 
+            by = c("q16c_05" = "food_item", "q16c_13_uml" = "values")) %>%
+  mutate(price14 = price_mean)
+agri22 <- agri22 %>%
+  mutate(gift_food = q16c_14*price12)
+#food production
+agri221 <- agri22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_food_production = sum(as.numeric(production), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri222 <- agri22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agri221, by = c("hhgrap", "hhnum")) 
+#household autocons
+agri223 <- agri22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_autocons = sum(as.numeric(autocons), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri225 <- left_join(agri222, agri223, by = c("hhgrap", "hhnum"))
+#gift food
+agri226 <- agri22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_gift_food = sum(as.numeric(gift_food), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri227 <- left_join(agri225, agri226, by = c("hhgrap", "hhnum"))
+#sales
+agri228 <- agri22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_sales = sum(as.numeric(q16c_17), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri229 <- left_join(agri227, agri228, by = c("hhgrap", "hhnum"))
+```
+
+cleaning data for 2023
+```{r, include=FALSE, echo=FALSE}
+agri23 <- agri23 %>%
+  mutate(food_production = q16c_12+q16c_12a)
+agri23 <- agri23 %>%
+  mutate(price = q16c_17/q16c_16)
+price <- agri23 %>%
+  group_by(q16c_05, price) %>%
+  summarise(values = paste(unique(q16c_16_uml), collapse = ", "), .groups = "drop") %>%
+  arrange(q16c_05, price)
+#rename variables
+price <- price %>% rename(food_item = q16c_05, 
+                      prix = price)
+price_unique <- price %>%
+  distinct(food_item, values, .keep_all = TRUE) %>%
+  group_by(food_item, values) %>%
+  summarize(price_mean = mean(prix, na.rm = TRUE), .groups = "drop")
+# calculate household food production
+agri23 <- agri23 %>%
+  mutate(q16c_12a_uml = as.numeric(q16c_12a_uml)) %>%
+  left_join(price_unique %>% mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_12a_uml" = "values")) %>%
+  mutate(price12 = price_mean)
+
+agri23 <- agri23 %>%
+  mutate(production = food_production*price12)
+# calculate household auto-food cons
+agri23 <- agri23 %>%
+  mutate(q16c_13_uml = as.numeric(q16c_13_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_13_uml" = "values"))
+agri23 <- agri23 %>% rename(price13 = price_mean.y) 
+agri23 <- agri23 %>%
+  mutate(autocons = q16c_13*price13)
+# calculate household gift-food
+agri23 <- agri23 %>%
+  mutate(q16c_14_uml = as.numeric(q16c_14_uml)) %>%
+  left_join(price_unique %>%
+              mutate(values = as.numeric(values)), 
+            by = c("q16c_05" = "food_item", "q16c_14_uml" = "values"))
+agri23 <- agri23 %>% rename(price14 = price_mean) 
+agri23 <- agri23 %>%
+  mutate(gift_food = q16c_14*price14)
+#food production
+agri231 <- agri23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_food_production = sum(as.numeric(production), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri232 <- agri23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agri231, by = c("hhgrap", "hhnum")) 
+#household autocons
+agri233 <- agri23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_autocons = sum(as.numeric(autocons), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri235 <- left_join(agri232, agri233, by = c("hhgrap", "hhnum"))
+#gift food
+agri236 <- agri23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_gift_food = sum(as.numeric(gift_food), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri237 <- left_join(agri235, agri236, by = c("hhgrap", "hhnum"))
+#sales
+agri238 <- agri23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_sales = sum(as.numeric(q16c_17), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agri239 <- left_join(agri237, agri238, by = c("hhgrap", "hhnum"))
+```
+
+```{r}
+#create year variable
+agri209$year <- 2020
+agri219$year <- 2021
+agri229$year <- 2022
+agri239$year <- 2023
+```
+
+```{r}
+agri <- bind_rows(agri209, agri219, agri229, agri239)
+```
+
+```{r}
+agri <- agri %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, agri, by = c("hhgrap", "hhnum","year"))
+```
+
+```{r}
+#rename some variables
+df <- df %>%
+  rename(culture_system = q16c_07, area_occupied = q16c_08, fertilizer_type = q16c_09)
+```
+
+add some more agriculture variable
+
+```{r}
+agria20 <- read_dta("raw_data/HPS2020/S16_AGRI_A.dta")
+agria21 <- read_dta("raw_data/HPS2021/S16_AGRI_A.dta")
+agria22 <- read_dta("raw_data/HPS2022/S16_AGRI_A.dta")
+agria23 <- read_dta("raw_data/HPS2023/S16_AGRI_A.dta")
+```
+
+```{r}
+#create year variable
+agria20$year <- 2020
+agria21$year <- 2021
+agria22$year <- 2022
+agria23$year <- 2023
+```
+
+```{r}
+agria <- bind_rows(agria20, agria21, agria22, agria23)
+```
+
+```{r}
+agria <- agria %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, agria, by = c("hhgrap", "hhnum","year"))
+```
+
+```{r}
+#rename some variables
+df <- df %>%
+  rename(area_cultivated = q16a_09_n1)
+df <- df %>%
+  rename(fertility = q16a_20)
+```
+
+```{r}
+agrib20 <- read_dta("raw_data/HPS2020/S16_AGRI_B.dta")
+agrib21 <- read_dta("raw_data/HPS2021/S16_AGRI_B.dta")
+agrib22 <- read_dta("raw_data/HPS2022/S16_AGRI_B.dta")
+agrib23 <- read_dta("raw_data/HPS2023/S16_AGRI_B.dta")
+```
+
+```{r, include=FALSE, echo=FALSE}
+agrib201 <- agrib20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_intrants = sum(as.numeric(q16b_02), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agrib202 <- agrib20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agrib201, by = c("hhgrap", "hhnum")) 
+agrib211 <- agrib21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_intrants = sum(as.numeric(q16b_02), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agrib212 <- agrib21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agrib211, by = c("hhgrap", "hhnum")) 
+agrib221 <- agrib22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_intrants = sum(as.numeric(q16b_02), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agrib222 <- agrib22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agrib221, by = c("hhgrap", "hhnum")) 
+agrib231 <- agrib23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_intrants = sum(as.numeric(q16b_02), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+agrib232 <- agrib23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(agrib231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+agrib202$year <- 2020
+agrib212$year <- 2021
+agrib222$year <- 2022
+agrib232$year <- 2023
+```
+
+```{r}
+agrib <- bind_rows(agrib202, agrib212, agrib222, agrib232)
+```
+
+```{r}
+agrib <- agrib %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, agrib, by = c("hhgrap", "hhnum","year"))
+```
+
+add agricultural equipement variable
+
+```{r}
+equi20 <- read_dta("raw_data/HPS2020/S19_EQUI.dta")
+equi21 <- read_dta("raw_data/HPS2021/S19_EQUI.dta")
+equi22 <- read_dta("raw_data/HPS2022/S19_EQUI.dta")
+equi23 <- read_dta("raw_data/HPS2023/S19_EQUI.dta")
+```
+
+```{r, include=FALSE, echo=FALSE}
+equi201 <- equi20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_equi = sum(as.numeric(q19_04), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+equi202 <- equi20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(equi201, by = c("hhgrap", "hhnum")) 
+equi211 <- equi21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_equi = sum(as.numeric(q19_04), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+equi212 <- equi21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(equi211, by = c("hhgrap", "hhnum")) 
+equi221 <- equi22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_equi = sum(as.numeric(q19_04), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+equi222 <- equi22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(equi221, by = c("hhgrap", "hhnum")) 
+equi231 <- equi23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_equi = sum(as.numeric(q19_04), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+equi232 <- equi23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(equi231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+equi202$year <- 2020
+equi212$year <- 2021
+equi222$year <- 2022
+equi232$year <- 2023
+```
+
+```{r}
+equi <- bind_rows(equi202, equi212, equi222, equi232)
+```
+
+```{r}
+equi <- equi %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, equi, by = c("hhgrap", "hhnum","year"))
+```
+
+Now, another mechanism is on household expenditure
+
+Another indicator of food security would be food expenses
+
+```{r}
+exp20 <- read_dta("raw_data/HPS2020/S07_CONS_AL.dta")
+exp21 <- read_dta("raw_data/HPS2021/S07_CONS_AL.dta")
+exp22 <- read_dta("raw_data/HPS2022/S07_CONS_AL.dta")
+exp23 <- read_dta("raw_data/HPS2023/S07_CONS_AL.dta")
+```
+
+create a district variable
+
+```{r, include=FALSE, echo=FALSE}
+exp201 <- exp20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_exp = sum(as.numeric(q7b_08), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+exp202 <- exp20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(exp201, by = c("hhgrap", "hhnum")) 
+exp211 <- exp21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_exp = sum(as.numeric(q7b_08), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+exp212 <- exp21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(exp211, by = c("hhgrap", "hhnum")) 
+exp221 <- exp22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_exp = sum(as.numeric(q7b_08), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+exp222 <- exp22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(exp221, by = c("hhgrap", "hhnum")) 
+exp231 <- exp23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_exp = sum(as.numeric(q7b_08), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+exp232 <- exp23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(exp231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+exp202$year <- 2020
+exp212$year <- 2021
+exp222$year <- 2022
+exp232$year <- 2023
+```
+
+```{r}
+exp <- bind_rows(exp202, exp212, exp222, exp232)
+```
+
+```{r}
+exp <- exp %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, exp, by = c("hhgrap", "hhnum","year"))
+```
+
+
+another mechanism will be by decrease in non_food production
+
+```{r}
+nf20 <- read_dta("raw_data/HPS2020/S09_CONS.dta")
+nf21 <- read_dta("raw_data/HPS2021/S09_CONS.dta")
+nf22 <- read_dta("raw_data/HPS2022/S09_CONS.dta")
+nf23 <- read_dta("raw_data/HPS2023/S09_CONS.dta")
+```
+
+```{r, include=FALSE, echo=FALSE}
+nf201 <- nf20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_nf = sum(as.numeric(q9b_03), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+nf202 <- nf20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(nf201, by = c("hhgrap", "hhnum")) 
+nf211 <- nf21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_nf = sum(as.numeric(q9b_03), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+nf212 <- nf21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(nf211, by = c("hhgrap", "hhnum")) 
+nf221 <- nf22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_nf = sum(as.numeric(q9b_03), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+nf222 <- nf22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(nf221, by = c("hhgrap", "hhnum")) 
+nf231 <- nf23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_nf = sum(as.numeric(q9b_03), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+nf232 <- nf23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(nf231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+nf202$year <- 2020
+nf212$year <- 2021
+nf222$year <- 2022
+nf232$year <- 2023
+```
+
+```{r}
+nf <- bind_rows(nf202, nf212, nf222, nf232)
+```
+
+```{r}
+nf <- nf %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, nf, by = c("hhgrap", "hhnum","year"))
+```
+
+
+```{r}
+feols(log(sum_nf) ~ cyclone1 + both_cyclone + post_2022 + factor(treatment):post_2022| district + year, 
+      data = nf,
+      cluster = ~district)
+```
+another mechanism is on transfer
+1. incoming transfer
+```{r}
+inctrans20 <- read_dta("raw_data/HPS2020/S13_TRAN_B1.dta")
+inctrans21 <- read_dta("raw_data/HPS2021/S13_TRAN_B1.dta")
+inctrans22 <- read_dta("raw_data/HPS2022/S13_TRAN_B1.dta")
+inctrans23 <- read_dta("raw_data/HPS2023/S13_TRAN_B1.dta")
+```
+
+
+```{r, include=FALSE, echo=FALSE}
+inctrans201 <- inctrans20 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_inctrans = sum(as.numeric(q13_18a), na.rm = TRUE),
+    sum2_inctrans = sum(as.numeric(q13_21a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+inctrans201 <- inctrans201 %>%
+  mutate(sum_inctrans = as.numeric(sum1_inctrans) + as.numeric(sum2_inctrans))
+inctrans202 <- inctrans20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(inctrans201, by = c("hhgrap", "hhnum")) 
+inctrans211 <- inctrans21 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_inctrans = sum(as.numeric(q13_18a), na.rm = TRUE),
+    sum2_inctrans = sum(as.numeric(q13_21a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+inctrans211 <- inctrans211 %>%
+  mutate(sum_inctrans = as.numeric(sum1_inctrans) + as.numeric(sum2_inctrans))
+inctrans212 <- inctrans21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(inctrans211, by = c("hhgrap", "hhnum")) 
+inctrans221 <- inctrans22 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_inctrans = sum(as.numeric(q13_18a), na.rm = TRUE),
+    sum2_inctrans = sum(as.numeric(q13_21a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+inctrans221 <- inctrans221 %>%
+  mutate(sum_inctrans = as.numeric(sum1_inctrans) + as.numeric(sum2_inctrans))
+inctrans222 <- inctrans22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(inctrans221, by = c("hhgrap", "hhnum")) 
+inctrans231 <- inctrans23 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_inctrans = sum(as.numeric(q13_18a), na.rm = TRUE),
+    sum2_inctrans = sum(as.numeric(q13_21a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+inctrans231 <- inctrans231 %>%
+  mutate(sum_inctrans = as.numeric(sum1_inctrans) + as.numeric(sum2_inctrans))
+inctrans232 <- inctrans23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(inctrans231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+inctrans202$year <- 2020
+inctrans212$year <- 2021
+inctrans222$year <- 2022
+inctrans232$year <- 2023
+```
+
+
+```{r}
+inctrans <- bind_rows(inctrans202, inctrans212, inctrans222, inctrans232)
+```
+
+```{r}
+inctrans <- inctrans %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, inctrans, by = c("hhgrap", "hhnum","year"))
+```
+
+2. mechanism on outgoing transfer
+```{r}
+outtrans20 <- read_dta("raw_data/HPS2020/S13_TRAN_B2.dta")
+outtrans21 <- read_dta("raw_data/HPS2021/S13_TRAN_B2.dta")
+outtrans22 <- read_dta("raw_data/HPS2022/S13_TRAN_B2.dta")
+outtrans23 <- read_dta("raw_data/HPS2023/S13_TRAN_B2.dta")
+```
+
+```{r, include=FALSE, echo=FALSE}
+outtrans201 <- outtrans20 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_outtrans = sum(as.numeric(q13_39a), na.rm = TRUE),
+    sum2_outtrans = sum(as.numeric(q13_42a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+outtrans201 <- outtrans201 %>%
+  mutate(sum_outtrans = as.numeric(sum1_outtrans) + as.numeric(sum2_outtrans))
+outtrans202 <- outtrans20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(outtrans201, by = c("hhgrap", "hhnum")) 
+outtrans211 <- outtrans21 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_outtrans = sum(as.numeric(q13_39a), na.rm = TRUE),
+    sum2_outtrans = sum(as.numeric(q13_42a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+outtrans211 <- outtrans211 %>%
+  mutate(sum_outtrans = as.numeric(sum1_outtrans) + as.numeric(sum2_outtrans))
+outtrans212 <- outtrans21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(outtrans211, by = c("hhgrap", "hhnum")) 
+outtrans221 <- outtrans22 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_outtrans = sum(as.numeric(q13_39a), na.rm = TRUE),
+    sum2_outtrans = sum(as.numeric(q13_42a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+outtrans221 <- outtrans221 %>%
+  mutate(sum_outtrans = as.numeric(sum1_outtrans) + as.numeric(sum2_outtrans))
+outtrans222 <- outtrans22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(outtrans221, by = c("hhgrap", "hhnum")) 
+outtrans231 <- outtrans23 %>%
+  group_by(hhgrap, hhnum) %>%
+  summarize(
+    sum1_outtrans = sum(as.numeric(q13_39a), na.rm = TRUE),
+    sum2_outtrans = sum(as.numeric(q13_42a), na.rm = TRUE)
+  ) %>%
+  ungroup()
+outtrans231 <- outtrans231 %>%
+  mutate(sum_outtrans = as.numeric(sum1_outtrans) + as.numeric(sum2_outtrans))
+outtrans232 <- outtrans23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(outtrans231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+outtrans202$year <- 2020
+outtrans212$year <- 2021
+outtrans222$year <- 2022
+outtrans232$year <- 2023
+```
+
+```{r}
+outtrans <- bind_rows(outtrans202, outtrans212, outtrans222, outtrans232)
+```
+
+```{r}
+outtrans <- outtrans %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, outtrans, by = c("hhgrap", "hhnum","year"))
+```
+
+mechanism on asset
+```{r}
+asset20 <- read_dta("raw_data/HPS2020/S12_AVOI.dta")
+asset21 <- read_dta("raw_data/HPS2021/S12_AVOI.dta")
+asset22 <- read_dta("raw_data/HPS2022/S12_AVOI.dta")
+asset23 <- read_dta("raw_data/HPS2023/S12_AVOI.dta")
+```
+
+```{r, include=FALSE, echo=FALSE}
+asset201 <- asset20 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_asset = sum(as.numeric(q12_032), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+asset202 <- asset20 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(asset201, by = c("hhgrap", "hhnum")) 
+asset211 <- asset21 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_asset = sum(as.numeric(q12_032), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+asset212 <- asset21 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(asset211, by = c("hhgrap", "hhnum")) 
+asset221 <- asset22 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_asset = sum(as.numeric(q12_032), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+asset222 <- asset22 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(asset221, by = c("hhgrap", "hhnum")) 
+asset231 <- asset23 %>%
+  group_by(hhgrap, hhnum) %>%  
+  summarize(
+    sum_asset = sum(as.numeric(q12_032), na.rm = TRUE), 
+  ) %>%
+  ungroup() 
+asset232 <- asset23 %>%
+  distinct(hhgrap, hhnum, .keep_all = TRUE) %>% 
+  left_join(asset231, by = c("hhgrap", "hhnum")) 
+```
+
+```{r}
+#create year variable
+asset202$year <- 2020
+asset212$year <- 2021
+asset222$year <- 2022
+asset232$year <- 2023
+```
+
+
+```{r}
+asset <- bind_rows(asset202, asset212, asset222, asset232)
+```
+
+```{r}
+asset <- asset %>%
+  distinct(hhgrap, hhnum, year, .keep_all = TRUE)
+df <- left_join(df, asset, by = c("hhgrap", "hhnum","year"))
+```
+
+```{r}
+write_dta(df, "food_cyclone.dta")
+```
+
