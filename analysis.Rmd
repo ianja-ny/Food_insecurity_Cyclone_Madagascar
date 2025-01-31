@@ -26,15 +26,6 @@ library(patchwork)
 library(kableExtra)
 ```
 
-```{r, include=FALSE, echo=FALSE}
-#set working directory
-setwd ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022")
-```
-
-```{r}
-df <- read_dta ("/Users/nyainaianjatinaandrianony/Desktop/food_insecurity_cyclone_Madagascar/food_cyclone_2022/cleaned_data/food_cyclone.dta")
-```
-
 Food Insecurity Outcomes
 
 ```{r, message = FALSE, warning = FALSE}
